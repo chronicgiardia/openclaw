@@ -1,4 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { buildXiaomiProvider, XIAOMI_DEFAULT_MODEL_ID } from "../agents/models-config.providers.js";
 import {
   buildSyntheticModelDefinition,
@@ -14,6 +16,7 @@ import {
 } from "../agents/venice-models.js";
 import {
   OPENROUTER_DEFAULT_MODEL_REF,
+  OPENGATEWAY_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
@@ -25,6 +28,28 @@ import {
   MOONSHOT_DEFAULT_MODEL_ID,
   MOONSHOT_DEFAULT_MODEL_REF,
 } from "./onboard-auth.models.js";
+
+const OPENGATEWAY_BASE_URL = "https://apis.opengateway.sionic.im/v1";
+const OPENGATEWAY_DEFAULT_MODEL_ID = "auto";
+const OPENGATEWAY_DEFAULT_MAX_TOKENS = 8192;
+const OPENGATEWAY_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+function buildOpengatewayModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: OPENGATEWAY_DEFAULT_MODEL_ID,
+    name: "OpenGateway Auto",
+    reasoning: false,
+    input: ["text"],
+    cost: OPENGATEWAY_DEFAULT_COST,
+    contextWindow: DEFAULT_CONTEXT_TOKENS,
+    maxTokens: OPENGATEWAY_DEFAULT_MAX_TOKENS,
+  };
+}
 
 export function applyZaiConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
@@ -68,6 +93,76 @@ export function applyOpenrouterProviderConfig(cfg: OpenClawConfig): OpenClawConf
       defaults: {
         ...cfg.agents?.defaults,
         models,
+      },
+    },
+  };
+}
+
+export function applyOpengatewayProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[OPENGATEWAY_DEFAULT_MODEL_REF] = {
+    ...models[OPENGATEWAY_DEFAULT_MODEL_REF],
+    alias: models[OPENGATEWAY_DEFAULT_MODEL_REF]?.alias ?? "OpenGateway",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.opengateway;
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
+  const defaultModel = buildOpengatewayModelDefinition();
+  const hasDefaultModel = existingModels.some((model) => model.id === OPENGATEWAY_DEFAULT_MODEL_ID);
+  const mergedModels =
+    existingModels.length > 0
+      ? hasDefaultModel
+        ? existingModels
+        : [...existingModels, defaultModel]
+      : [defaultModel];
+  const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
+    string,
+    unknown
+  > as { apiKey?: string };
+  const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.opengateway = {
+    ...existingProviderRest,
+    baseUrl: OPENGATEWAY_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels,
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applyOpengatewayConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyOpengatewayProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: OPENGATEWAY_DEFAULT_MODEL_REF,
+        },
       },
     },
   };

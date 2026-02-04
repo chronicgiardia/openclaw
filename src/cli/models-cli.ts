@@ -20,6 +20,7 @@ import {
   modelsImageFallbacksListCommand,
   modelsImageFallbacksRemoveCommand,
   modelsListCommand,
+  modelsRemoteCommand,
   modelsScanCommand,
   modelsSetCommand,
   modelsSetImageCommand,
@@ -272,6 +273,23 @@ export function registerModelsCli(program: Command) {
     .action(async (opts) => {
       await runModelsCommand(async () => {
         await modelsScanCommand(opts, defaultRuntime);
+      });
+    });
+
+  models
+    .command("remote")
+    .description("List models from a remote OpenAI-compatible /models endpoint")
+    .option("--provider <id>", "Provider id (default: opengateway)")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runModelsCommand(async () => {
+        await modelsRemoteCommand(
+          {
+            provider: opts.provider as string | undefined,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
       });
     });
 

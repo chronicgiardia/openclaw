@@ -14,6 +14,7 @@ import {
   applyMinimaxApiConfig,
   applyMinimaxConfig,
   applyMoonshotConfig,
+  applyOpengatewayConfig,
   applyOpencodeZenConfig,
   applyOpenrouterConfig,
   applySyntheticConfig,
@@ -26,6 +27,7 @@ import {
   setKimiCodingApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
+  setOpengatewayApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
@@ -255,6 +257,29 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyOpenrouterConfig(nextConfig);
+  }
+
+  if (authChoice === "opengateway-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "opengateway",
+      cfg: baseConfig,
+      flagValue: opts.opengatewayApiKey,
+      flagName: "--opengateway-api-key",
+      envVar: "OPENGATEWAY_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setOpengatewayApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "opengateway:default",
+      provider: "opengateway",
+      mode: "api_key",
+    });
+    return applyOpengatewayConfig(nextConfig);
   }
 
   if (authChoice === "ai-gateway-api-key") {

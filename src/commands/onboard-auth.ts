@@ -9,6 +9,8 @@ export {
   applyKimiCodeProviderConfig,
   applyMoonshotConfig,
   applyMoonshotProviderConfig,
+  applyOpengatewayConfig,
+  applyOpengatewayProviderConfig,
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,
   applySyntheticConfig,
@@ -36,11 +38,13 @@ export {
 } from "./onboard-auth.config-opencode.js";
 export {
   OPENROUTER_DEFAULT_MODEL_REF,
+  OPENGATEWAY_DEFAULT_MODEL_REF,
   setAnthropicApiKey,
   setGeminiApiKey,
   setKimiCodingApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
+  setOpengatewayApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
