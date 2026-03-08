@@ -15,6 +15,22 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
   websearch: "web_search",
   webfetch: "web_fetch",
   "apply-patch": "apply_patch",
+  multiedit: "apply_patch",
+  terminal: "process",
+  notebook: "canvas",
+  computer: "nodes",
+  schedule: "cron",
+  runtime: "gateway",
+  agents: "agents_list",
+  tasklist: "sessions_list",
+  taskhistory: "sessions_history",
+  tasksend: "sessions_send",
+  task: "sessions_spawn",
+  taskmanager: "subagents",
+  status: "session_status",
+  viewimage: "image",
+  document: "pdf",
+  speak: "tts",
 };
 
 export const TOOL_GROUPS: Record<string, string[]> = { ...CORE_TOOL_GROUPS };

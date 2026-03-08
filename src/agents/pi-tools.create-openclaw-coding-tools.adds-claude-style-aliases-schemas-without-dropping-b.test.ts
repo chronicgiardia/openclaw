@@ -101,18 +101,25 @@ describe("createOpenClawCodingTools", () => {
     const oauthTools = createOpenClawCodingTools({
       modelProvider: "anthropic",
       modelAuthMode: "oauth",
+      senderIsOwner: true,
     });
     const names = new Set(oauthTools.map((tool) => tool.name));
     expect(names.has("Bash")).toBe(true);
     expect(names.has("Read")).toBe(true);
     expect(names.has("Write")).toBe(true);
     expect(names.has("Edit")).toBe(true);
-    // fast-tool-stubs removes optional web tools in this suite, so only assert
-    // the reduced Claude-style aliases that are guaranteed here.
-    expect(names.has("apply_patch")).toBe(false);
-    expect(names.has("process")).toBe(false);
+    expect(names.has("Process")).toBe(true);
+    expect(names.has("Runtime")).toBe(true);
+    expect(names.has("Task")).toBe(true);
+    expect(names.has("TaskList")).toBe(true);
+    expect(names.has("TaskHistory")).toBe(true);
+    expect(names.has("TaskSend")).toBe(true);
+    expect(names.has("TaskManager")).toBe(true);
+    expect(names.has("Computer")).toBe(true);
+    expect(names.has("Schedule")).toBe(true);
     expect(names.has("gateway")).toBe(false);
     expect(names.has("sessions_spawn")).toBe(false);
+    expect(names.has("subagents")).toBe(false);
   });
   it("provides top-level object schemas for all tools", () => {
     const tools = createOpenClawCodingTools();

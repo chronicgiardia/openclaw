@@ -577,8 +577,8 @@ export function createOpenClawCodingTools(options?: {
   });
 
   // Default tool names stay canonical/lowercase. Anthropic OAuth strict-compat mode
-  // intentionally aliases a reduced subset to Claude Code-style names so the prompt
-  // and wire format look less OpenClaw-specific while normalizeToolName keeps
+  // aliases the full visible surface to Claude Code-style or generic names so the
+  // prompt and wire format look less OpenClaw-specific while normalizeToolName keeps
   // dispatch/policy checks stable.
   return isAnthropicOAuthStrictCompatibilityMode(compatibilityMode)
     ? applyAnthropicOAuthCompatibilityToTools(withAbort)

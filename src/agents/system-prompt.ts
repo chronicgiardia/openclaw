@@ -131,6 +131,10 @@ function buildMessagingSection(params: {
   runtimeChannel?: string;
   messageToolHints?: string[];
   providerCompatibilityMode?: ProviderCompatibilityMode;
+  execToolName: string;
+  messageToolName: string;
+  sessionsSendToolName: string;
+  subagentsToolName: string;
 }) {
   if (params.isMinimal) {
     return [];
@@ -142,23 +146,31 @@ function buildMessagingSection(params: {
     "## Messaging",
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     ...(params.availableTools.has("sessions_send")
-      ? ["- Cross-session messaging → use sessions_send(sessionKey, message)"]
+      ? [
+          anthropicOAuthCompat
+            ? `- Cross-task messaging → use ${params.sessionsSendToolName}(sessionKey, message)`
+            : `- Cross-session messaging → use ${params.sessionsSendToolName}(sessionKey, message)`,
+        ]
       : []),
     ...(params.availableTools.has("subagents")
-      ? ["- Sub-agent orchestration → use subagents(action=list|steer|kill)"]
+      ? [
+          anthropicOAuthCompat
+            ? `- Task orchestration → use ${params.subagentsToolName}(action=list|steer|kill)`
+            : `- Sub-agent orchestration → use ${params.subagentsToolName}(action=list|steer|kill)`,
+        ]
       : []),
     `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`,
     anthropicOAuthCompat
-      ? "- Never use exec/curl for provider messaging; Claude Code handles all routing internally."
-      : "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
+      ? `- Never use ${params.execToolName}/curl for provider messaging; Claude Code handles all routing internally.`
+      : `- Never use ${params.execToolName}/curl for provider messaging; OpenClaw handles all routing internally.`,
     params.availableTools.has("message")
       ? [
           "",
-          "### message tool",
-          "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
+          `### ${params.messageToolName} tool`,
+          `- Use \`${params.messageToolName}\` for proactive sends + channel actions (polls, reactions, etc.).`,
           "- For `action=send`, include `to` and `message`.",
           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
-          `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
+          `- If you use \`${params.messageToolName}\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
           params.inlineButtonsEnabled
             ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data,style?}]]`; `style` can be `primary`, `success`, or `danger`."
             : params.runtimeChannel
@@ -266,45 +278,6 @@ export function buildAgentSystemPrompt(params: {
   const acpEnabled = params.acpEnabled !== false;
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
   const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
-  const coreToolSummaries: Record<string, string> = {
-    read: "Read file contents",
-    write: "Create or overwrite files",
-    edit: "Make precise edits to files",
-    apply_patch: "Apply multi-file patches",
-    grep: "Search file contents for patterns",
-    find: "Find files by glob pattern",
-    ls: "List directory contents",
-    exec: "Run shell commands (pty available for TTY-required CLIs)",
-    process: "Manage background exec sessions",
-    web_search: "Search the web (Brave API)",
-    web_fetch: "Fetch and extract readable content from a URL",
-    // Channel docking: add login tools here when a channel needs interactive linking.
-    browser: anthropicOAuthCompat ? "Control the browser" : "Control web browser",
-    canvas: "Present/eval/snapshot the Canvas",
-    nodes: "List/describe/notify/camera/screen on paired nodes",
-    cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
-    message: "Send messages and channel actions",
-    gateway: anthropicOAuthCompat
-      ? "Control the local runtime process"
-      : "Restart, apply config, or run updates on the running OpenClaw process",
-    agents_list: acpSpawnRuntimeEnabled
-      ? anthropicOAuthCompat
-        ? 'List agent ids allowed for sessions_spawn when runtime="subagent" (not ACP harness ids)'
-        : 'List OpenClaw agent ids allowed for sessions_spawn when runtime="subagent" (not ACP harness ids)'
-      : anthropicOAuthCompat
-        ? "List agent ids allowed for sessions_spawn"
-        : "List OpenClaw agent ids allowed for sessions_spawn",
-    sessions_list: "List other sessions (incl. sub-agents) with filters/last",
-    sessions_history: "Fetch history for another session/sub-agent",
-    sessions_send: "Send a message to another session/sub-agent",
-    sessions_spawn: acpSpawnRuntimeEnabled
-      ? 'Spawn an isolated sub-agent or ACP coding session (runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured; ACP harness ids follow acp.allowedAgents, not agents_list)'
-      : "Spawn an isolated sub-agent session",
-    subagents: "List, steer, or kill sub-agent runs for this requester session",
-    session_status:
-      "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
-    image: "Analyze an image with the configured image model",
-  };
 
   const toolOrder = [
     "read",
@@ -381,6 +354,87 @@ export function buildAgentSystemPrompt(params: {
     new Set(normalizedTools.filter((tool) => !toolOrder.includes(tool))),
   );
   const enabledTools = toolOrder.filter((tool) => availableTools.has(tool));
+  const hasGateway = displayedTools.has("gateway");
+  const readToolName = resolveToolName("read");
+  const writeToolName = resolveToolName("write");
+  const editToolName = resolveToolName("edit");
+  const applyPatchToolName = resolveToolName("apply_patch");
+  const findToolName = resolveToolName("find");
+  const lsToolName = resolveToolName("ls");
+  const execToolName = resolveToolName("exec");
+  const processToolName = resolveToolName("process");
+  const browserToolName = resolveToolName("browser");
+  const canvasToolName = resolveToolName("canvas");
+  const nodesToolName = resolveToolName("nodes");
+  const cronToolName = resolveToolName("cron");
+  const messageToolName = resolveToolName("message");
+  const agentsListToolName = resolveToolName("agents_list");
+  const sessionsListToolName = resolveToolName("sessions_list");
+  const sessionsHistoryToolName = resolveToolName("sessions_history");
+  const sessionsSendToolName = resolveToolName("sessions_send");
+  const sessionsSpawnToolName = resolveToolName("sessions_spawn");
+  const subagentsToolName = resolveToolName("subagents");
+  const sessionStatusToolName = resolveToolName("session_status");
+  const coreToolSummaries: Record<string, string> = {
+    read: "Read file contents",
+    write: "Create or overwrite files",
+    edit: "Make precise edits to files",
+    apply_patch: "Apply multi-file patches",
+    grep: "Search file contents for patterns",
+    find: "Find files by glob pattern",
+    ls: "List directory contents",
+    exec: "Run shell commands (pty available for TTY-required CLIs)",
+    process: "Manage background exec sessions",
+    web_search: "Search the web (Brave API)",
+    web_fetch: "Fetch and extract readable content from a URL",
+    // Channel docking: add login tools here when a channel needs interactive linking.
+    browser: anthropicOAuthCompat ? "Control the browser" : "Control web browser",
+    canvas: anthropicOAuthCompat
+      ? "Work with notebook-style artifacts and evaluations"
+      : "Present/eval/snapshot the Canvas",
+    nodes: anthropicOAuthCompat
+      ? "Discover and control paired devices and runtime surfaces"
+      : "List/describe/notify/camera/screen on paired nodes",
+    cron: anthropicOAuthCompat
+      ? "Schedule reminders, recurring tasks, and wake events"
+      : "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
+    message: "Send messages and channel actions",
+    gateway: anthropicOAuthCompat
+      ? "Inspect, configure, restart, or update the local runtime"
+      : "Restart, apply config, or run updates on the running OpenClaw process",
+    agents_list: acpSpawnRuntimeEnabled
+      ? anthropicOAuthCompat
+        ? `List agent ids allowed for ${sessionsSpawnToolName} when \`runtime="subagent"\` (not ACP harness ids)`
+        : 'List OpenClaw agent ids allowed for sessions_spawn when runtime="subagent" (not ACP harness ids)'
+      : anthropicOAuthCompat
+        ? `List agent ids allowed for ${sessionsSpawnToolName}`
+        : "List OpenClaw agent ids allowed for sessions_spawn",
+    sessions_list: anthropicOAuthCompat
+      ? "List other tasks and related runs with filters/last"
+      : "List other sessions (incl. sub-agents) with filters/last",
+    sessions_history: anthropicOAuthCompat
+      ? "Fetch history for another task or run"
+      : "Fetch history for another session/sub-agent",
+    sessions_send: anthropicOAuthCompat
+      ? "Send a message to another task or run"
+      : "Send a message to another session/sub-agent",
+    sessions_spawn: acpSpawnRuntimeEnabled
+      ? anthropicOAuthCompat
+        ? `Start an isolated task or ACP coding session (\`runtime="acp"\` requires \`agentId\` unless \`acp.defaultAgent\` is configured; ACP harness ids follow \`acp.allowedAgents\`, not \`${agentsListToolName}\`)`
+        : 'Spawn an isolated sub-agent or ACP coding session (runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured; ACP harness ids follow acp.allowedAgents, not agents_list)'
+      : anthropicOAuthCompat
+        ? "Start an isolated task session"
+        : "Spawn an isolated sub-agent session",
+    subagents: anthropicOAuthCompat
+      ? "List, steer, or stop spawned tasks for this requester"
+      : "List, steer, or kill sub-agent runs for this requester session",
+    session_status: anthropicOAuthCompat
+      ? `Show a status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 ${sessionStatusToolName}); optional per-task model override`
+      : "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
+    image: "Analyze an image with the configured image model",
+    pdf: "Analyze a PDF with the configured document model",
+    tts: "Convert text to speech",
+  };
   const toolLines = enabledTools.map((tool) => {
     const summary = coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
     const name = resolveToolName(tool);
@@ -391,11 +445,6 @@ export function buildAgentSystemPrompt(params: {
     const name = resolveToolName(tool);
     toolLines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
   }
-
-  const hasGateway = displayedTools.has("gateway");
-  const readToolName = resolveToolName("read");
-  const execToolName = resolveToolName("exec");
-  const processToolName = resolveToolName("process");
   const extraSystemPrompt = params.extraSystemPrompt?.trim();
   const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
   const ownerLine = buildOwnerIdentityLine(
@@ -443,7 +492,7 @@ export function buildAgentSystemPrompt(params: {
       : sanitizedWorkspaceDir;
   const workspaceGuidance =
     params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
-      ? `For read/write/edit/apply_patch, file paths resolve against host workspace: ${sanitizedWorkspaceDir}. For bash/exec commands, use sandbox container paths under ${sanitizedSandboxContainerWorkspace} (or relative paths from that workdir), not host paths. Prefer relative paths so both sandboxed exec and file tools work consistently.`
+      ? `For ${readToolName}/${writeToolName}/${editToolName}/${applyPatchToolName}, file paths resolve against host workspace: ${sanitizedWorkspaceDir}. For ${execToolName}/${processToolName} commands, use sandbox container paths under ${sanitizedSandboxContainerWorkspace} (or relative paths from that workdir), not host paths. Prefer relative paths so both sandboxed exec and file tools work consistently.`
       : "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.";
   const safetySection = [
     "## Safety",
@@ -489,22 +538,36 @@ export function buildAgentSystemPrompt(params: {
       : [
           "Pi lists the standard tools above. This runtime enables:",
           "- grep: search file contents for patterns",
-          "- find: find files by glob pattern",
-          "- ls: list directory contents",
-          "- apply_patch: apply multi-file patches",
+          `- ${findToolName}: find files by glob pattern`,
+          `- ${lsToolName}: list directory contents`,
+          `- ${applyPatchToolName}: apply multi-file patches`,
           `- ${execToolName}: run shell commands (supports background via yieldMs/background)`,
           `- ${processToolName}: manage background exec sessions`,
           anthropicOAuthCompat
-            ? "- browser: control Claude Code's dedicated browser"
-            : "- browser: control OpenClaw's dedicated browser",
-          "- canvas: present/eval/snapshot the Canvas",
-          "- nodes: list/describe/notify/camera/screen on paired nodes",
-          "- cron: manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
-          "- sessions_list: list sessions",
-          "- sessions_history: fetch session history",
-          "- sessions_send: send to another session",
-          "- subagents: list/steer/kill sub-agent runs",
-          '- session_status: show usage/time/model state and answer "what model are we using?"',
+            ? `- ${browserToolName}: control Claude Code's dedicated browser`
+            : `- ${browserToolName}: control OpenClaw's dedicated browser`,
+          anthropicOAuthCompat
+            ? `- ${canvasToolName}: work with notebook-style artifacts and evaluations`
+            : `- ${canvasToolName}: present/eval/snapshot the Canvas`,
+          anthropicOAuthCompat
+            ? `- ${nodesToolName}: discover and control paired devices and runtime surfaces`
+            : `- ${nodesToolName}: list/describe/notify/camera/screen on paired nodes`,
+          anthropicOAuthCompat
+            ? `- ${cronToolName}: schedule reminders, recurring tasks, and wake events`
+            : `- ${cronToolName}: manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)`,
+          anthropicOAuthCompat
+            ? `- ${sessionsListToolName}: list tasks and related runs`
+            : `- ${sessionsListToolName}: list sessions`,
+          anthropicOAuthCompat
+            ? `- ${sessionsHistoryToolName}: fetch task history`
+            : `- ${sessionsHistoryToolName}: fetch session history`,
+          anthropicOAuthCompat
+            ? `- ${sessionsSendToolName}: send to another task`
+            : `- ${sessionsSendToolName}: send to another session`,
+          anthropicOAuthCompat
+            ? `- ${subagentsToolName}: list/steer/stop spawned tasks`
+            : `- ${subagentsToolName}: list/steer/kill sub-agent runs`,
+          `- ${sessionStatusToolName}: show usage/time/model state and answer "what model are we using?"`,
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     displayedTools.has("process")
@@ -512,20 +575,22 @@ export function buildAgentSystemPrompt(params: {
       : `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs/background and continue once the command is ready.`,
     ...(displayedTools.has("subagents")
       ? [
-          "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
+          anthropicOAuthCompat
+            ? `If a task is more complex or takes longer, start a child task with ${sessionsSpawnToolName}. Completion is push-based: it will auto-announce when done.`
+            : "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
         ]
       : []),
     ...(acpHarnessSpawnAllowed
       ? [
-          'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent and call `sessions_spawn` with `runtime: "acp"`.',
+          `For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent and call \`${sessionsSpawnToolName}\` with \`runtime: "acp"\`.`,
           'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`) unless the user asks otherwise.',
-          "Set `agentId` explicitly unless `acp.defaultAgent` is configured, and do not route ACP harness requests through `subagents`/`agents_list` or local PTY exec flows.",
-          'For ACP harness thread spawns, do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path.',
+          `Set \`agentId\` explicitly unless \`acp.defaultAgent\` is configured, and do not route ACP harness requests through \`${subagentsToolName}\`/\`${agentsListToolName}\` or local PTY ${execToolName} flows.`,
+          `For ACP harness thread spawns, do not call \`${messageToolName}\` with \`action=thread-create\`; use \`${sessionsSpawnToolName}\` (\`runtime: "acp"\`, \`thread: true\`) as the single thread creation path.`,
         ]
       : []),
     ...(displayedTools.has("subagents") || displayedTools.has("sessions_list")
       ? [
-          "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
+          `Do not repeatedly poll \`${subagentsToolName}\` or \`${sessionsListToolName}\`; only check status on-demand (for intervention, debugging, or when explicitly asked).`,
         ]
       : []),
     "",
@@ -577,7 +642,7 @@ export function buildAgentSystemPrompt(params: {
       : "",
     params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
     userTimezone && displayedTools.has("session_status")
-      ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
+      ? `If you need the current date, time, or day of week, run ${sessionStatusToolName} (📊 ${sessionStatusToolName}).`
       : "",
     "## Workspace",
     `Your working directory is: ${displayWorkspaceDir}`,
@@ -592,7 +657,9 @@ export function buildAgentSystemPrompt(params: {
           "Some tools may be unavailable due to sandbox policy.",
           "Sub-agents stay sandboxed (no elevated/host access). Need outside-sandbox read/write? Don't spawn; ask first.",
           hasSessionsSpawn && acpEnabled
-            ? 'ACP harness spawns are blocked from sandboxed sessions (`sessions_spawn` with `runtime: "acp"`). Use `runtime: "subagent"` instead.'
+            ? anthropicOAuthCompat
+              ? `ACP harness spawns are blocked from sandboxed sessions (\`${sessionsSpawnToolName}\` with \`runtime: "acp"\`). Use \`runtime: "subagent"\` instead.`
+              : 'ACP harness spawns are blocked from sandboxed sessions (`sessions_spawn` with `runtime: "acp"`). Use `runtime: "subagent"` instead.'
             : "",
           params.sandboxInfo.containerWorkspaceDir
             ? `Sandbox container workdir: ${sanitizeForPromptLiteral(params.sandboxInfo.containerWorkspaceDir)}`
@@ -651,6 +718,10 @@ export function buildAgentSystemPrompt(params: {
       runtimeChannel,
       messageToolHints: params.messageToolHints,
       providerCompatibilityMode: params.providerCompatibilityMode,
+      execToolName,
+      messageToolName,
+      sessionsSendToolName,
+      subagentsToolName,
     }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   ];

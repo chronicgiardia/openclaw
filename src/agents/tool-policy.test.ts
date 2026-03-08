@@ -76,6 +76,15 @@ describe("tool-policy", () => {
     expect(normalizeToolName("WebSearch")).toBe("web_search");
     expect(normalizeToolName("WebFetch")).toBe("web_fetch");
     expect(normalizeToolName("apply-patch")).toBe("apply_patch");
+    expect(normalizeToolName("MultiEdit")).toBe("apply_patch");
+    expect(normalizeToolName("Runtime")).toBe("gateway");
+    expect(normalizeToolName("Task")).toBe("sessions_spawn");
+    expect(normalizeToolName("TaskManager")).toBe("subagents");
+    expect(normalizeToolName("TaskList")).toBe("sessions_list");
+    expect(normalizeToolName("TaskHistory")).toBe("sessions_history");
+    expect(normalizeToolName("TaskSend")).toBe("sessions_send");
+    expect(normalizeToolName("Computer")).toBe("nodes");
+    expect(normalizeToolName("Speak")).toBe("tts");
     expect(normalizeToolName("READ")).toBe("read");
   });
 

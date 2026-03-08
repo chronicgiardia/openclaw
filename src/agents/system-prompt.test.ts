@@ -222,7 +222,9 @@ describe("buildAgentSystemPrompt", () => {
       "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
     );
     expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
-    expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
+    expect(prompt).toContain(
+      "Do not repeatedly poll `subagents` or `sessions_list`; only check status on-demand",
+    );
     expect(prompt).toContain(
       "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
     );
@@ -335,7 +337,7 @@ describe("buildAgentSystemPrompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       providerCompatibilityMode: "anthropic-oauth-strict",
-      toolNames: ["Read", "Bash", "WebSearch"],
+      toolNames: ["Read", "Bash", "Runtime", "Task", "TaskList", "TaskManager", "WebSearch"],
       docsPath: "/tmp/openclaw/docs",
       runtimeInfo: {
         host: "openclaw",
@@ -355,7 +357,17 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("These user-editable files are loaded by OpenClaw");
     expect(prompt).not.toContain("repo=/tmp/openclaw");
     expect(prompt).not.toContain("host=openclaw");
+    expect(prompt).not.toContain("sessions_spawn");
+    expect(prompt).not.toContain("sessions_list");
+    expect(prompt).not.toContain("subagents");
+    expect(prompt).not.toContain("gateway");
     expect(prompt).toContain("These user-editable files are loaded by Claude Code");
+    expect(prompt).toContain("- Runtime: Inspect, configure, restart, or update the local runtime");
+    expect(prompt).toContain("- Task: Start an isolated task");
+    expect(prompt).toContain("- TaskList: List other tasks and related runs with filters/last");
+    expect(prompt).toContain(
+      "- TaskManager: List, steer, or stop spawned tasks for this requester",
+    );
   });
 
   it("includes docs guidance when docsPath is provided", () => {
@@ -682,7 +694,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("Your working directory is: /workspace");
     expect(prompt).toContain(
-      "For read/write/edit/apply_patch, file paths resolve against host workspace: /tmp/openclaw. For bash/exec commands, use sandbox container paths under /workspace (or relative paths from that workdir), not host paths.",
+      "For read/write/edit/apply_patch, file paths resolve against host workspace: /tmp/openclaw. For exec/process commands, use sandbox container paths under /workspace (or relative paths from that workdir), not host paths.",
     );
     expect(prompt).toContain("Sandbox container workdir: /workspace");
     expect(prompt).toContain(
