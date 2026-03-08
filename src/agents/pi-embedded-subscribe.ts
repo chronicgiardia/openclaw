@@ -9,6 +9,7 @@ import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streami
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
+import { rewriteAnthropicOAuthCompatibilityText } from "./anthropic-oauth-compat.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -401,7 +402,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       return;
     }
     // Strip <think> and <final> blocks across chunk boundaries to avoid leaking reasoning.
-    const chunk = stripBlockTags(text, state.blockState).trimEnd();
+    const chunk = rewriteAnthropicOAuthCompatibilityText(
+      stripBlockTags(text, state.blockState).trimEnd(),
+      params.providerCompatibilityMode,
+    );
     if (!chunk) {
       return;
     }
@@ -477,7 +481,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!state.streamReasoning || !params.onReasoningStream) {
       return;
     }
-    const formatted = formatReasoningMessage(text);
+    const formatted = rewriteAnthropicOAuthCompatibilityText(
+      formatReasoningMessage(text),
+      params.providerCompatibilityMode,
+    );
     if (!formatted) {
       return;
     }

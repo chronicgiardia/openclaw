@@ -25,6 +25,9 @@ const ANTHROPIC_OAUTH_COMPAT_TOOL_NAME_MAP: Record<string, string> = {
   web_fetch: "WebFetch",
 };
 
+const OPENCLAW_BRANDING_RE = /(^|[^A-Za-z0-9_./@-])OpenClaw(?![./@_-][A-Za-z0-9_])/g;
+const openclawBrandingRe = /(^|[^A-Za-z0-9_./@-])openclaw(?![./@_-][A-Za-z0-9_])/g;
+
 export function resolveProviderCompatibilityMode(params: {
   modelProvider?: string;
   modelAuthMode?: ModelAuthMode;
@@ -68,4 +71,16 @@ export function applyAnthropicOAuthCompatibilityToTools<
         label: compatLabel,
       };
     });
+}
+
+export function rewriteAnthropicOAuthCompatibilityText(
+  text: string,
+  mode?: ProviderCompatibilityMode,
+): string {
+  if (!text || !isAnthropicOAuthStrictCompatibilityMode(mode)) {
+    return text;
+  }
+  return text
+    .replace(OPENCLAW_BRANDING_RE, (_match, prefix: string) => `${prefix}Claude Code`)
+    .replace(openclawBrandingRe, (_match, prefix: string) => `${prefix}claudecode`);
 }

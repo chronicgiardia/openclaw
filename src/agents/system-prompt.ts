@@ -5,6 +5,7 @@ import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import {
   isAnthropicOAuthStrictCompatibilityMode,
+  rewriteAnthropicOAuthCompatibilityText,
   type ProviderCompatibilityMode,
 } from "./anthropic-oauth-compat.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
@@ -148,7 +149,7 @@ function buildMessagingSection(params: {
       : []),
     `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`,
     anthropicOAuthCompat
-      ? "- Never use exec/curl for provider messaging; the runtime handles all routing internally."
+      ? "- Never use exec/curl for provider messaging; Claude Code handles all routing internally."
       : "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
     params.availableTools.has("message")
       ? [
@@ -470,7 +471,7 @@ export function buildAgentSystemPrompt(params: {
 
   // For "none" mode, return just the basic identity line
   const identityLine = anthropicOAuthCompat
-    ? "You are an AI assistant operating in a local coding environment."
+    ? "You are Claude Code, an AI assistant operating in a local coding environment."
     : "You are a personal assistant running inside OpenClaw.";
 
   if (promptMode === "none") {
@@ -494,7 +495,7 @@ export function buildAgentSystemPrompt(params: {
           `- ${execToolName}: run shell commands (supports background via yieldMs/background)`,
           `- ${processToolName}: manage background exec sessions`,
           anthropicOAuthCompat
-            ? "- browser: control the dedicated browser"
+            ? "- browser: control Claude Code's dedicated browser"
             : "- browser: control OpenClaw's dedicated browser",
           "- canvas: present/eval/snapshot the Canvas",
           "- nodes: list/describe/notify/camera/screen on paired nodes",
@@ -638,7 +639,7 @@ export function buildAgentSystemPrompt(params: {
     }),
     "## Workspace Files (injected)",
     anthropicOAuthCompat
-      ? "These user-editable files are loaded by the runtime and included below in Project Context."
+      ? "These user-editable files are loaded by Claude Code and included below in Project Context."
       : "These user-editable files are loaded by OpenClaw and included below in Project Context.",
     "",
     ...buildReplyTagsSection(isMinimal),
@@ -772,7 +773,10 @@ export function buildAgentSystemPrompt(params: {
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
   );
 
-  return lines.filter(Boolean).join("\n");
+  return rewriteAnthropicOAuthCompatibilityText(
+    lines.filter(Boolean).join("\n"),
+    params.providerCompatibilityMode,
+  );
 }
 
 export function buildRuntimeLine(

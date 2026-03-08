@@ -343,7 +343,9 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("You are an AI assistant operating in a local coding environment.");
+    expect(prompt).toContain(
+      "You are Claude Code, an AI assistant operating in a local coding environment.",
+    );
     expect(prompt).toContain("- Read: Read file contents");
     expect(prompt).toContain("- Bash: Run shell commands");
     expect(prompt).not.toContain("running inside OpenClaw");
@@ -353,7 +355,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("These user-editable files are loaded by OpenClaw");
     expect(prompt).not.toContain("repo=/tmp/openclaw");
     expect(prompt).not.toContain("host=openclaw");
-    expect(prompt).toContain("These user-editable files are loaded by the runtime");
+    expect(prompt).toContain("These user-editable files are loaded by Claude Code");
   });
 
   it("includes docs guidance when docsPath is provided", () => {

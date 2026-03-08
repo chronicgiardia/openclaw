@@ -6,6 +6,35 @@ type StubSession = {
   subscribe: (fn: (evt: unknown) => void) => () => void;
 };
 
+function createStubSessionHarness() {
+  let handler: ((evt: unknown) => void) | undefined;
+  const session: StubSession = {
+    subscribe: (fn) => {
+      handler = fn;
+      return () => {};
+    },
+  };
+
+  return {
+    session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+    emit: (evt: unknown) => handler?.(evt),
+  };
+}
+
+function emitMessageStartAndEndForAssistantText(params: {
+  emit: (evt: unknown) => void;
+  text: string;
+}) {
+  params.emit({ type: "message_start", message: { role: "assistant" } });
+  params.emit({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: params.text }],
+    } as AssistantMessage,
+  });
+}
+
 describe("subscribeEmbeddedPiSession", () => {
   const THINKING_TAG_CASES = [
     { tag: "think", open: "<think>", close: "</think>" },
@@ -16,7 +45,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
   it.each(THINKING_TAG_CASES)(
     "streams <%s> reasoning via onReasoningStream without leaking into final text",
-    ({ open, close }) => {
+    async ({ open, close }) => {
       let handler: ((evt: unknown) => void) | undefined;
       const session: StubSession = {
         subscribe: (fn) => {
@@ -24,7 +53,6 @@ describe("subscribeEmbeddedPiSession", () => {
           return () => {};
         },
       };
-
       const onReasoningStream = vi.fn();
       const onBlockReply = vi.fn();
 
@@ -66,6 +94,7 @@ describe("subscribeEmbeddedPiSession", () => {
       } as AssistantMessage;
 
       handler?.({ type: "message_end", message: assistantMessage });
+      await Promise.resolve();
 
       expect(onBlockReply).toHaveBeenCalledTimes(1);
       expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
@@ -81,9 +110,32 @@ describe("subscribeEmbeddedPiSession", () => {
       ]);
     },
   );
+
+  it("rewrites OpenClaw branding in strict compatibility mode user-facing replies", async () => {
+    const { session, emit } = createStubSessionHarness();
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      providerCompatibilityMode: "anthropic-oauth-strict",
+    });
+
+    emitMessageStartAndEndForAssistantText({
+      emit,
+      text: "The package name is `openclaw`.",
+    });
+    await Promise.resolve();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0][0].text).toBe("The package name is `claudecode`.");
+  });
+
   it.each(THINKING_TAG_CASES)(
     "suppresses <%s> blocks across chunk boundaries",
-    ({ open, close }) => {
+    async ({ open, close }) => {
       let handler: ((evt: unknown) => void) | undefined;
       const session: StubSession = {
         subscribe: (fn) => {
@@ -91,7 +143,6 @@ describe("subscribeEmbeddedPiSession", () => {
           return () => {};
         },
       };
-
       const onBlockReply = vi.fn();
 
       subscribeEmbeddedPiSession({
@@ -133,6 +184,7 @@ describe("subscribeEmbeddedPiSession", () => {
         message: { role: "assistant" },
         assistantMessageEvent: { type: "text_end" },
       });
+      await Promise.resolve();
 
       const payloadTexts = onBlockReply.mock.calls
         .map((call) => call[0]?.text)

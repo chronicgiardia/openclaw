@@ -1,8 +1,10 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { rewriteAnthropicOAuthCompatibilityText } from "./anthropic-oauth-compat.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -29,6 +31,24 @@ const stripTrailingDirective = (text: string): string => {
   return text.slice(0, openIndex);
 };
 
+function rewriteVisibleAssistantText(ctx: EmbeddedPiSubscribeContext, text: string): string {
+  return rewriteAnthropicOAuthCompatibilityText(text, ctx.params.providerCompatibilityMode);
+}
+
+export function resolveSilentReplyFallbackText(params: {
+  text: string;
+  messagingToolSentTexts: string[];
+}): string {
+  const trimmed = params.text.trim();
+  if (trimmed !== SILENT_REPLY_TOKEN) {
+    return params.text;
+  }
+  const fallback = params.messagingToolSentTexts.at(-1)?.trim();
+  if (!fallback) {
+    return params.text;
+  }
+  return fallback;
+}
 export function handleMessageStart(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
@@ -125,7 +145,7 @@ export function handleMessageUpdate(
     const visibleDelta = chunk ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState) : "";
     const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
     const parsedFull = parseReplyDirectives(stripTrailingDirective(next));
-    const cleanedText = parsedFull.text;
+    const cleanedText = rewriteVisibleAssistantText(ctx, parsedFull.text);
     const mediaUrls = parsedDelta?.mediaUrls;
     const hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
     const hasAudio = Boolean(parsedDelta?.audioAsVoice);
@@ -209,12 +229,20 @@ export function handleMessageEnd(
     rawThinking: extractAssistantThinking(assistantMessage),
   });
 
-  const text = ctx.stripBlockTags(rawText, { thinking: false, final: false });
+  const text = rewriteVisibleAssistantText(
+    ctx,
+    resolveSilentReplyFallbackText({
+      text: ctx.stripBlockTags(rawText, { thinking: false, final: false }),
+      messagingToolSentTexts: ctx.state.messagingToolSentTexts,
+    }),
+  );
   const rawThinking =
     ctx.state.includeReasoning || ctx.state.streamReasoning
       ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
       : "";
-  const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
+  const formattedReasoning = rawThinking
+    ? rewriteVisibleAssistantText(ctx, formatReasoningMessage(rawThinking))
+    : "";
 
   const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
   const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;
