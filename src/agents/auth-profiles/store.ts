@@ -33,29 +33,32 @@ function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | n
     return null;
   }
 
-  const mainKey = resolveRuntimeStoreKey(undefined);
-  const requestedKey = resolveRuntimeStoreKey(agentDir);
-  const mainStore = runtimeAuthStoreSnapshots.get(mainKey);
-  const requestedStore = runtimeAuthStoreSnapshots.get(requestedKey);
-
-  if (!agentDir || requestedKey === mainKey) {
-    if (!mainStore) {
+  const cloneAndSync = (store: AuthProfileStore | undefined): AuthProfileStore | null => {
+    if (!store) {
       return null;
     }
-    return cloneAuthProfileStore(mainStore);
+    const cloned = cloneAuthProfileStore(store);
+    syncExternalCliCredentials(cloned);
+    return cloned;
+  };
+
+  const mainKey = resolveRuntimeStoreKey(undefined);
+  const requestedKey = resolveRuntimeStoreKey(agentDir);
+  const mainStore = cloneAndSync(runtimeAuthStoreSnapshots.get(mainKey));
+  const requestedStore = cloneAndSync(runtimeAuthStoreSnapshots.get(requestedKey));
+
+  if (!agentDir || requestedKey === mainKey) {
+    return mainStore;
   }
 
   if (mainStore && requestedStore) {
-    return mergeAuthProfileStores(
-      cloneAuthProfileStore(mainStore),
-      cloneAuthProfileStore(requestedStore),
-    );
+    return mergeAuthProfileStores(mainStore, requestedStore);
   }
   if (requestedStore) {
-    return cloneAuthProfileStore(requestedStore);
+    return requestedStore;
   }
   if (mainStore) {
-    return cloneAuthProfileStore(mainStore);
+    return mainStore;
   }
 
   return null;

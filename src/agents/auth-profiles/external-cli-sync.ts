@@ -1,15 +1,25 @@
 import {
+  readClaudeCliCredentialsCached,
   readQwenCliCredentialsCached,
   readMiniMaxCliCredentialsCached,
 } from "../cli-credentials.js";
 import {
+  CLAUDE_CLI_PROFILE_ID,
   EXTERNAL_CLI_NEAR_EXPIRY_MS,
   EXTERNAL_CLI_SYNC_TTL_MS,
-  QWEN_CLI_PROFILE_ID,
   MINIMAX_CLI_PROFILE_ID,
+  QWEN_CLI_PROFILE_ID,
   log,
 } from "./constants.js";
-import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  OAuthCredential,
+  TokenCredential,
+} from "./types.js";
+
+type ExternalCliCredential = OAuthCredential | TokenCredential;
+const ANTHROPIC_DEFAULT_PROFILE_ID = "anthropic:default";
 
 function shallowEqualOAuthCredentials(a: OAuthCredential | undefined, b: OAuthCredential): boolean {
   if (!a) {
@@ -30,6 +40,92 @@ function shallowEqualOAuthCredentials(a: OAuthCredential | undefined, b: OAuthCr
   );
 }
 
+function shallowEqualCliCredential(
+  a: AuthProfileCredential | undefined,
+  b: AuthProfileCredential,
+): boolean {
+  if (!a || a.provider !== b.provider) {
+    return false;
+  }
+  if (b.type === "token") {
+    if (a.type !== "token") {
+      return false;
+    }
+    return a.token === b.token && a.expires === b.expires && a.email === b.email;
+  }
+  if (b.type === "oauth") {
+    if (a.type !== "oauth") {
+      return false;
+    }
+    return shallowEqualOAuthCredentials(a, b);
+  }
+  return false;
+}
+
+function resolveExternalCredentialExpiry(
+  cred: AuthProfileCredential | undefined,
+): number | undefined {
+  if (!cred || (cred.type !== "oauth" && cred.type !== "token")) {
+    return undefined;
+  }
+  return cred.expires;
+}
+
+function shouldReplaceExternalCredential(params: {
+  existing: AuthProfileCredential | undefined;
+  incoming: ExternalCliCredential;
+  provider: string;
+  now: number;
+}): boolean {
+  return (
+    !params.existing ||
+    params.existing.type !== params.incoming.type ||
+    params.existing.provider !== params.provider ||
+    !isExternalProfileFresh(params.existing, params.now) ||
+    !shallowEqualCliCredential(params.existing, params.incoming) ||
+    (typeof params.incoming.expires === "number" &&
+      (typeof resolveExternalCredentialExpiry(params.existing) !== "number" ||
+        params.incoming.expires > (resolveExternalCredentialExpiry(params.existing) ?? 0)))
+  );
+}
+
+function syncAnthropicDefaultFromClaudeCli(
+  store: AuthProfileStore,
+  creds: ExternalCliCredential,
+  now: number,
+): boolean {
+  const existing = store.profiles[ANTHROPIC_DEFAULT_PROFILE_ID];
+  if (existing && existing.provider !== "anthropic") {
+    return false;
+  }
+  if (existing && existing.type !== "oauth" && existing.type !== "token") {
+    return false;
+  }
+  if (
+    !shouldReplaceExternalCredential({
+      existing,
+      incoming: creds,
+      provider: "anthropic",
+      now,
+    })
+  ) {
+    return false;
+  }
+  store.profiles[ANTHROPIC_DEFAULT_PROFILE_ID] = { ...creds, provider: "anthropic" };
+  log.info("synced anthropic default credentials from claude cli", {
+    profileId: ANTHROPIC_DEFAULT_PROFILE_ID,
+    expires:
+      typeof creds.expires === "number" && Number.isFinite(creds.expires)
+        ? new Date(creds.expires).toISOString()
+        : undefined,
+  });
+  return true;
+}
+
+function isExternalCliManagedProvider(provider: string): boolean {
+  return provider === "anthropic" || provider === "qwen-portal" || provider === "minimax-portal";
+}
+
 function isExternalProfileFresh(cred: AuthProfileCredential | undefined, now: number): boolean {
   if (!cred) {
     return false;
@@ -37,7 +133,7 @@ function isExternalProfileFresh(cred: AuthProfileCredential | undefined, now: nu
   if (cred.type !== "oauth" && cred.type !== "token") {
     return false;
   }
-  if (cred.provider !== "qwen-portal" && cred.provider !== "minimax-portal") {
+  if (!isExternalCliManagedProvider(cred.provider)) {
     return false;
   }
   if (typeof cred.expires !== "number") {
@@ -51,29 +147,30 @@ function syncExternalCliCredentialsForProvider(
   store: AuthProfileStore,
   profileId: string,
   provider: string,
-  readCredentials: () => OAuthCredential | null,
+  readCredentials: () => ExternalCliCredential | null,
   now: number,
 ): boolean {
   const existing = store.profiles[profileId];
-  const shouldSync =
-    !existing || existing.provider !== provider || !isExternalProfileFresh(existing, now);
-  const creds = shouldSync ? readCredentials() : null;
+  const creds = readCredentials();
   if (!creds) {
     return false;
   }
 
-  const existingOAuth = existing?.type === "oauth" ? existing : undefined;
-  const shouldUpdate =
-    !existingOAuth ||
-    existingOAuth.provider !== provider ||
-    existingOAuth.expires <= now ||
-    creds.expires > existingOAuth.expires;
+  const shouldUpdate = shouldReplaceExternalCredential({
+    existing,
+    incoming: creds,
+    provider,
+    now,
+  });
 
-  if (shouldUpdate && !shallowEqualOAuthCredentials(existingOAuth, creds)) {
+  if (shouldUpdate) {
     store.profiles[profileId] = creds;
     log.info(`synced ${provider} credentials from external cli`, {
       profileId,
-      expires: new Date(creds.expires).toISOString(),
+      expires:
+        typeof creds.expires === "number" && Number.isFinite(creds.expires)
+          ? new Date(creds.expires).toISOString()
+          : undefined,
     });
     return true;
   }
@@ -89,6 +186,31 @@ function syncExternalCliCredentialsForProvider(
 export function syncExternalCliCredentials(store: AuthProfileStore): boolean {
   let mutated = false;
   const now = Date.now();
+
+  if (
+    syncExternalCliCredentialsForProvider(
+      store,
+      CLAUDE_CLI_PROFILE_ID,
+      "anthropic",
+      () =>
+        readClaudeCliCredentialsCached({
+          ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,
+          allowKeychainPrompt: false,
+        }),
+      now,
+    )
+  ) {
+    mutated = true;
+  }
+  const anthropicCliCreds = store.profiles[CLAUDE_CLI_PROFILE_ID];
+  if (
+    anthropicCliCreds &&
+    (anthropicCliCreds.type === "oauth" || anthropicCliCreds.type === "token") &&
+    anthropicCliCreds.provider === "anthropic" &&
+    syncAnthropicDefaultFromClaudeCli(store, anthropicCliCreds, now)
+  ) {
+    mutated = true;
+  }
 
   // Sync from Qwen Code CLI
   const existingQwen = store.profiles[QWEN_CLI_PROFILE_ID];

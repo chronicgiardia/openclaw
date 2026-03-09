@@ -10,8 +10,9 @@ import { withFileLock } from "../../infra/file-lock.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
+import { writeClaudeCliCredentials } from "../cli-credentials.js";
 import { normalizeProviderId } from "../model-selection.js";
-import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
+import { ANTHROPIC_OAUTH_PROACTIVE_REFRESH_MS, AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
@@ -20,6 +21,8 @@ import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 
 const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
+const CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const CLAUDE_OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 
 const isOAuthProvider = (provider: string): provider is OAuthProvider =>
   OAUTH_PROVIDER_IDS.has(provider);
@@ -109,6 +112,65 @@ function shouldUseOpenaiCodexRefreshFallback(params: {
   );
 }
 
+function isValidOAuthExpiry(expires: number): boolean {
+  return Number.isFinite(expires) && expires > 0;
+}
+
+function isOAuthStillValid(credentials: OAuthCredentials, now = Date.now()): boolean {
+  return isValidOAuthExpiry(credentials.expires) && now < credentials.expires;
+}
+
+function isOAuthFreshEnough(
+  credentials: OAuthCredentials,
+  refreshLeadMs = 0,
+  now = Date.now(),
+): boolean {
+  const leadMs = Math.max(0, refreshLeadMs);
+  return isValidOAuthExpiry(credentials.expires) && now + leadMs < credentials.expires;
+}
+
+function resolveOAuthProactiveRefreshWindowMs(provider: string): number {
+  return normalizeProviderId(provider) === "anthropic" ? ANTHROPIC_OAUTH_PROACTIVE_REFRESH_MS : 0;
+}
+
+function mirrorAnthropicOAuthToClaudeCli(provider: string, credentials: OAuthCredentials): void {
+  if (normalizeProviderId(provider) !== "anthropic") {
+    return;
+  }
+  writeClaudeCliCredentials(credentials);
+}
+
+async function refreshAnthropicClaudeToken(refreshToken: string): Promise<OAuthCredentials> {
+  const response = await fetch(CLAUDE_OAUTH_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      grant_type: "refresh_token",
+      client_id: CLAUDE_OAUTH_CLIENT_ID,
+      refresh_token: refreshToken,
+    }),
+  });
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Anthropic token refresh failed: ${error}`);
+  }
+  const data = (await response.json()) as {
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+  };
+  if (!data.access_token || typeof data.expires_in !== "number") {
+    throw new Error("Anthropic token refresh response missing required fields");
+  }
+  return {
+    access: data.access_token,
+    refresh: data.refresh_token || refreshToken,
+    expires: Date.now() + data.expires_in * 1000 - 5 * 60 * 1000,
+  };
+}
+
 type ResolveApiKeyForProfileParams = {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
@@ -158,6 +220,7 @@ function adoptNewerMainOAuthCredential(params: {
 async function refreshOAuthTokenWithLock(params: {
   profileId: string;
   agentDir?: string;
+  refreshIfExpiresWithinMs?: number;
 }): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
   const authPath = resolveAuthStorePath(params.agentDir);
   ensureAuthStoreFile(authPath);
@@ -169,7 +232,8 @@ async function refreshOAuthTokenWithLock(params: {
       return null;
     }
 
-    if (Date.now() < cred.expires) {
+    const refreshLeadMs = Math.max(0, params.refreshIfExpiresWithinMs ?? 0);
+    if (isOAuthFreshEnough(cred, refreshLeadMs)) {
       return {
         apiKey: buildOAuthApiKey(cred.provider, cred),
         newCredentials: cred,
@@ -188,29 +252,43 @@ async function refreshOAuthTokenWithLock(params: {
             });
             return { apiKey: newCredentials.access, newCredentials };
           })()
-        : String(cred.provider) === "qwen-portal"
+        : String(cred.provider) === "anthropic"
           ? await (async () => {
-              const newCredentials = await refreshQwenPortalCredentials(cred);
+              const newCredentials = await refreshAnthropicClaudeToken(cred.refresh);
               return { apiKey: newCredentials.access, newCredentials };
             })()
-          : await (async () => {
-              const oauthProvider = resolveOAuthProvider(cred.provider);
-              if (!oauthProvider) {
-                return null;
-              }
-              return await getOAuthApiKey(oauthProvider, oauthCreds);
-            })();
+          : String(cred.provider) === "qwen-portal"
+            ? await (async () => {
+                const newCredentials = await refreshQwenPortalCredentials(cred);
+                return { apiKey: newCredentials.access, newCredentials };
+              })()
+            : await (async () => {
+                const oauthProvider = resolveOAuthProvider(cred.provider);
+                if (!oauthProvider) {
+                  return null;
+                }
+                return await getOAuthApiKey(oauthProvider, oauthCreds);
+              })();
     if (!result) {
       return null;
     }
-    store.profiles[params.profileId] = {
+    const updatedCredentials: OAuthCredentials & {
+      type: "oauth";
+      provider: string;
+      email?: string;
+    } = {
       ...cred,
       ...result.newCredentials,
       type: "oauth",
     };
+    store.profiles[params.profileId] = updatedCredentials;
     saveAuthProfileStore(store, params.agentDir);
+    mirrorAnthropicOAuthToClaudeCli(updatedCredentials.provider, updatedCredentials);
 
-    return result;
+    return {
+      apiKey: result.apiKey,
+      newCredentials: updatedCredentials,
+    };
   });
 }
 
@@ -233,7 +311,8 @@ async function tryResolveOAuthProfile(
     return null;
   }
 
-  if (Date.now() < cred.expires) {
+  const refreshLeadMs = resolveOAuthProactiveRefreshWindowMs(cred.provider);
+  if (isOAuthFreshEnough(cred, refreshLeadMs)) {
     return buildOAuthProfileResult({
       provider: cred.provider,
       credentials: cred,
@@ -241,18 +320,43 @@ async function tryResolveOAuthProfile(
     });
   }
 
-  const refreshed = await refreshOAuthTokenWithLock({
-    profileId,
-    agentDir: params.agentDir,
-  });
-  if (!refreshed) {
-    return null;
+  try {
+    const refreshed = await refreshOAuthTokenWithLock({
+      profileId,
+      agentDir: params.agentDir,
+      refreshIfExpiresWithinMs: refreshLeadMs,
+    });
+    if (!refreshed) {
+      if (isOAuthStillValid(cred)) {
+        return buildOAuthProfileResult({
+          provider: cred.provider,
+          credentials: cred,
+          email: cred.email,
+        });
+      }
+      return null;
+    }
+    return buildApiKeyProfileResult({
+      apiKey: refreshed.apiKey,
+      provider: cred.provider,
+      email: cred.email,
+    });
+  } catch (error) {
+    if (isOAuthStillValid(cred)) {
+      log.warn("oauth proactive refresh failed; using still-valid cached token", {
+        profileId,
+        provider: cred.provider,
+        error: extractErrorMessage(error),
+        expires: new Date(cred.expires).toISOString(),
+      });
+      return buildOAuthProfileResult({
+        provider: cred.provider,
+        credentials: cred,
+        email: cred.email,
+      });
+    }
+    throw error;
   }
-  return buildApiKeyProfileResult({
-    apiKey: refreshed.apiKey,
-    provider: cred.provider,
-    email: cred.email,
-  });
 }
 
 async function resolveProfileSecretString(params: {
@@ -378,7 +482,8 @@ export async function resolveApiKeyForProfile(
       cred,
     }) ?? cred;
 
-  if (Date.now() < oauthCred.expires) {
+  const refreshLeadMs = resolveOAuthProactiveRefreshWindowMs(oauthCred.provider);
+  if (isOAuthFreshEnough(oauthCred, refreshLeadMs)) {
     return buildOAuthProfileResult({
       provider: oauthCred.provider,
       credentials: oauthCred,
@@ -390,8 +495,16 @@ export async function resolveApiKeyForProfile(
     const result = await refreshOAuthTokenWithLock({
       profileId,
       agentDir: params.agentDir,
+      refreshIfExpiresWithinMs: refreshLeadMs,
     });
     if (!result) {
+      if (isOAuthStillValid(oauthCred)) {
+        return buildOAuthProfileResult({
+          provider: oauthCred.provider,
+          credentials: oauthCred,
+          email: oauthCred.email,
+        });
+      }
       return null;
     }
     return buildApiKeyProfileResult({
@@ -402,11 +515,24 @@ export async function resolveApiKeyForProfile(
   } catch (error) {
     const refreshedStore = ensureAuthProfileStore(params.agentDir);
     const refreshed = refreshedStore.profiles[profileId];
-    if (refreshed?.type === "oauth" && Date.now() < refreshed.expires) {
+    if (refreshed?.type === "oauth" && isOAuthStillValid(refreshed)) {
       return buildOAuthProfileResult({
         provider: refreshed.provider,
         credentials: refreshed,
         email: refreshed.email ?? cred.email,
+      });
+    }
+    if (isOAuthStillValid(oauthCred)) {
+      log.warn("oauth proactive refresh failed; using still-valid cached token", {
+        profileId,
+        provider: cred.provider,
+        error: extractErrorMessage(error),
+        expires: new Date(oauthCred.expires).toISOString(),
+      });
+      return buildOAuthProfileResult({
+        provider: oauthCred.provider,
+        credentials: oauthCred,
+        email: oauthCred.email,
       });
     }
     const fallbackProfileId = suggestOAuthProfileIdForLegacyDefault({
