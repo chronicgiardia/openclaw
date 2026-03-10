@@ -14,6 +14,7 @@ import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js"
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
 import {
+  forceRefreshOAuthProfile,
   isProfileInCooldown,
   type AuthProfileFailureReason,
   markAuthProfileFailure,
@@ -707,17 +708,52 @@ export async function runEmbeddedPiAgent(
         }
       }
 
-      const maybeRefreshCopilotForAuthError = async (
+      const maybeRefreshAuthForAuthError = async (
         errorText: string,
         retried: boolean,
       ): Promise<boolean> => {
-        if (!copilotTokenState || retried) {
+        if (retried) {
           return false;
         }
         if (!isFailoverErrorMessage(errorText)) {
           return false;
         }
         if (classifyFailoverReason(errorText) !== "auth") {
+          return false;
+        }
+        if (apiKeyInfo?.mode === "oauth" && lastProfileId) {
+          try {
+            const refreshed = await forceRefreshOAuthProfile({
+              cfg: params.config,
+              profileId: lastProfileId,
+              agentDir,
+              provider,
+            });
+            if (refreshed?.apiKey) {
+              authStorage.setRuntimeApiKey(model.provider, refreshed.apiKey);
+              apiKeyInfo = {
+                apiKey: refreshed.apiKey,
+                profileId: lastProfileId,
+                source: `profile:${lastProfileId}`,
+                mode: "oauth",
+              };
+              log.info("refreshed oauth auth profile after auth error; retrying once", {
+                profileId: lastProfileId,
+                provider,
+                model: modelId,
+              });
+              return true;
+            }
+          } catch (error) {
+            log.warn("oauth auth-error refresh failed; falling back to profile rotation", {
+              profileId: lastProfileId,
+              provider,
+              model: modelId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+        if (!copilotTokenState) {
           return false;
         }
         try {
@@ -1150,7 +1186,7 @@ export async function runEmbeddedPiAgent(
 
           if (promptError && !aborted) {
             const errorText = describeUnknownError(promptError);
-            if (await maybeRefreshCopilotForAuthError(errorText, copilotAuthRetry)) {
+            if (await maybeRefreshAuthForAuthError(errorText, copilotAuthRetry)) {
               authRetryPending = true;
               continue;
             }
@@ -1280,7 +1316,7 @@ export async function runEmbeddedPiAgent(
 
           if (
             authFailure &&
-            (await maybeRefreshCopilotForAuthError(
+            (await maybeRefreshAuthForAuthError(
               lastAssistant?.errorMessage ?? "",
               copilotAuthRetry,
             ))

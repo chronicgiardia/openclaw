@@ -221,6 +221,7 @@ async function refreshOAuthTokenWithLock(params: {
   profileId: string;
   agentDir?: string;
   refreshIfExpiresWithinMs?: number;
+  force?: boolean;
 }): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
   const authPath = resolveAuthStorePath(params.agentDir);
   ensureAuthStoreFile(authPath);
@@ -233,7 +234,7 @@ async function refreshOAuthTokenWithLock(params: {
     }
 
     const refreshLeadMs = Math.max(0, params.refreshIfExpiresWithinMs ?? 0);
-    if (isOAuthFreshEnough(cred, refreshLeadMs)) {
+    if (!params.force && isOAuthFreshEnough(cred, refreshLeadMs)) {
       return {
         apiKey: buildOAuthApiKey(cred.provider, cred),
         newCredentials: cred,
@@ -290,6 +291,67 @@ async function refreshOAuthTokenWithLock(params: {
       newCredentials: updatedCredentials,
     };
   });
+}
+
+export async function forceRefreshOAuthProfile(params: {
+  cfg?: OpenClawConfig;
+  profileId: string;
+  agentDir?: string;
+  provider?: string;
+}): Promise<{ apiKey: string; provider: string; email?: string } | null> {
+  const store = ensureAuthProfileStore(params.agentDir);
+  const cred = store.profiles[params.profileId];
+  if (!cred || cred.type !== "oauth") {
+    return null;
+  }
+  if (
+    params.provider &&
+    normalizeProviderId(cred.provider) !== normalizeProviderId(params.provider)
+  ) {
+    return null;
+  }
+  if (
+    !isProfileConfigCompatible({
+      cfg: params.cfg,
+      profileId: params.profileId,
+      provider: cred.provider,
+      mode: cred.type,
+    })
+  ) {
+    return null;
+  }
+
+  try {
+    const refreshed = await refreshOAuthTokenWithLock({
+      profileId: params.profileId,
+      agentDir: params.agentDir,
+      force: true,
+    });
+    if (!refreshed) {
+      return null;
+    }
+    return buildApiKeyProfileResult({
+      apiKey: refreshed.apiKey,
+      provider: cred.provider,
+      email: cred.email,
+    });
+  } catch (error) {
+    const refreshedStore = ensureAuthProfileStore(params.agentDir);
+    const refreshed = refreshedStore.profiles[params.profileId];
+    if (
+      refreshed?.type === "oauth" &&
+      isOAuthStillValid(refreshed) &&
+      (!params.provider ||
+        normalizeProviderId(refreshed.provider) === normalizeProviderId(params.provider))
+    ) {
+      return buildOAuthProfileResult({
+        provider: refreshed.provider,
+        credentials: refreshed,
+        email: refreshed.email ?? cred.email,
+      });
+    }
+    throw error;
+  }
 }
 
 async function tryResolveOAuthProfile(

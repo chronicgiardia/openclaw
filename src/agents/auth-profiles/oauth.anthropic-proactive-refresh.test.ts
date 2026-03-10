@@ -31,7 +31,7 @@ vi.mock("../cli-credentials.js", async () => {
   };
 });
 
-import { resolveApiKeyForProfile } from "./oauth.js";
+import { forceRefreshOAuthProfile, resolveApiKeyForProfile } from "./oauth.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -216,5 +216,56 @@ describe("resolveApiKeyForProfile anthropic proactive refresh", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(getOAuthApiKeyMock).not.toHaveBeenCalled();
     expect(writeClaudeCliCredentialsMock).not.toHaveBeenCalled();
+  });
+
+  it("forces anthropic oauth refresh after an auth error even when the token is not near expiry", async () => {
+    const profileId = "anthropic:default";
+    const oldExpires = Date.now() + 2 * 60 * 60_000;
+    const newExpires = Date.now() + 4 * 60 * 60_000 - 5 * 60 * 1000;
+    saveAuthProfileStore(
+      createOauthStore({
+        profileId,
+        access: "still-fresh-access",
+        refresh: "still-fresh-refresh",
+        expires: oldExpires,
+      }),
+      agentDir,
+    );
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          access_token: "forced-refresh-access",
+          refresh_token: "forced-refresh-refresh",
+          expires_in: 4 * 60 * 60,
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    const result = await forceRefreshOAuthProfile({
+      profileId,
+      agentDir,
+      provider: "anthropic",
+    });
+
+    expect(result).toEqual({
+      apiKey: "forced-refresh-access", // pragma: allowlist secret
+      provider: "anthropic",
+      email: undefined,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(getOAuthApiKeyMock).not.toHaveBeenCalled();
+    expect(writeClaudeCliCredentialsMock).toHaveBeenCalledTimes(1);
+    const updated = ensureAuthProfileStore(agentDir).profiles[profileId];
+    expect(updated).toMatchObject({
+      type: "oauth",
+      provider: "anthropic",
+      access: "forced-refresh-access",
+      refresh: "forced-refresh-refresh",
+      expires: newExpires,
+    });
   });
 });

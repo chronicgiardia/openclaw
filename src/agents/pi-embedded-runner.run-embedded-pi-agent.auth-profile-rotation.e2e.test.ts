@@ -9,6 +9,7 @@ import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const resolveCopilotApiTokenMock = vi.fn();
+const oauthRefreshFetchMock = vi.fn();
 const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
   computeBackoffMock: vi.fn(
     (
@@ -60,6 +61,7 @@ beforeEach(() => {
   vi.useRealTimers();
   runEmbeddedAttemptMock.mockClear();
   resolveCopilotApiTokenMock.mockReset();
+  oauthRefreshFetchMock.mockReset();
   computeBackoffMock.mockClear();
   sleepWithAbortMock.mockClear();
 });
@@ -199,6 +201,49 @@ const makeCopilotConfig = (): OpenClawConfig =>
     },
   }) satisfies OpenClawConfig;
 
+const anthropicModelId = "claude-opus-4-6";
+
+const makeAnthropicConfig = (): OpenClawConfig =>
+  ({
+    auth: {
+      profiles: {
+        "anthropic:default": {
+          provider: "anthropic",
+          mode: "oauth",
+        },
+      },
+      order: {
+        anthropic: ["anthropic:default"],
+      },
+    },
+    agents: {
+      defaults: {
+        model: {
+          primary: `anthropic/${anthropicModelId}`,
+        },
+      },
+    },
+    models: {
+      providers: {
+        anthropic: {
+          api: "anthropic-messages",
+          baseUrl: "https://api.anthropic.com",
+          models: [
+            {
+              id: anthropicModelId,
+              name: "Claude Opus 4.6",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 200_000,
+              maxTokens: 8192,
+            },
+          ],
+        },
+      },
+    },
+  }) satisfies OpenClawConfig;
+
 const writeAuthStore = async (
   agentDir: string,
   opts?: {
@@ -246,8 +291,33 @@ const writeCopilotAuthStore = async (agentDir: string, token = "gh-token") => {
   await fs.writeFile(authPath, JSON.stringify(payload));
 };
 
+const writeAnthropicOauthAuthStore = async (agentDir: string, params?: { expiresAt?: number }) => {
+  const authPath = path.join(agentDir, "auth-profiles.json");
+  const payload = {
+    version: 1,
+    profiles: {
+      "anthropic:default": {
+        type: "oauth",
+        provider: "anthropic",
+        access: "anthropic-stale-access",
+        refresh: "anthropic-refresh-token",
+        expires: params?.expiresAt ?? Date.now() + 2 * 60 * 60 * 1000,
+      },
+    },
+  };
+  await fs.writeFile(authPath, JSON.stringify(payload));
+};
+
 const buildCopilotAssistant = (overrides: Partial<AssistantMessage> = {}) =>
   buildAssistant({ provider: "github-copilot", model: copilotModelId, ...overrides });
+
+const buildAnthropicAssistant = (overrides: Partial<AssistantMessage> = {}) =>
+  buildAssistant({
+    api: "anthropic-messages",
+    provider: "anthropic",
+    model: anthropicModelId,
+    ...overrides,
+  });
 
 const mockFailedThenSuccessfulAttempt = (errorMessage = "rate limit") => {
   runEmbeddedAttemptMock
@@ -541,6 +611,85 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
       expect(resolveCopilotApiTokenMock).toHaveBeenCalledTimes(2);
     } finally {
+      vi.useRealTimers();
+      await fs.rm(agentDir, { recursive: true, force: true });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes anthropic oauth after auth error and retries once", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", oauthRefreshFetchMock);
+    try {
+      const now = Date.now();
+      vi.setSystemTime(now);
+      await writeAnthropicOauthAuthStore(agentDir, {
+        expiresAt: now + 2 * 60 * 60 * 1000,
+      });
+      oauthRefreshFetchMock.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            access_token: "anthropic-fresh-access",
+            refresh_token: "anthropic-fresh-refresh",
+            expires_in: 4 * 60 * 60,
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      );
+
+      runEmbeddedAttemptMock
+        .mockResolvedValueOnce(
+          makeAttempt({
+            assistantTexts: [],
+            lastAssistant: buildAnthropicAssistant({
+              stopReason: "error",
+              errorMessage: "HTTP 401 authentication_error: Invalid authentication credentials",
+            }),
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeAttempt({
+            assistantTexts: ["ok"],
+            lastAssistant: buildAnthropicAssistant({
+              stopReason: "stop",
+              content: [{ type: "text", text: "ok" }],
+            }),
+          }),
+        );
+
+      await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:anthropic-oauth-auth-error",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeAnthropicConfig(),
+        prompt: "hello",
+        provider: "anthropic",
+        model: anthropicModelId,
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:anthropic-oauth-auth-error",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
+      expect(oauthRefreshFetchMock).toHaveBeenCalledTimes(1);
+      const stored = JSON.parse(
+        await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf-8"),
+      ) as {
+        profiles?: Record<string, { access?: string; refresh?: string; expires?: number }>;
+      };
+      expect(stored.profiles?.["anthropic:default"]).toMatchObject({
+        access: "anthropic-fresh-access",
+        refresh: "anthropic-fresh-refresh",
+      });
+    } finally {
+      vi.unstubAllGlobals();
       vi.useRealTimers();
       await fs.rm(agentDir, { recursive: true, force: true });
       await fs.rm(workspaceDir, { recursive: true, force: true });
