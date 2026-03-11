@@ -4,9 +4,15 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
 
-const { fetchMock, getOAuthApiKeyMock, writeClaudeCliCredentialsMock } = vi.hoisted(() => ({
+const {
+  fetchMock,
+  getOAuthApiKeyMock,
+  readClaudeCliCredentialsMock,
+  writeClaudeCliCredentialsMock,
+} = vi.hoisted(() => ({
   fetchMock: vi.fn(),
   getOAuthApiKeyMock: vi.fn(),
+  readClaudeCliCredentialsMock: vi.fn(),
   writeClaudeCliCredentialsMock: vi.fn(() => true),
 }));
 
@@ -27,6 +33,7 @@ vi.mock("../cli-credentials.js", async () => {
     await vi.importActual<typeof import("../cli-credentials.js")>("../cli-credentials.js");
   return {
     ...actual,
+    readClaudeCliCredentials: readClaudeCliCredentialsMock,
     writeClaudeCliCredentials: writeClaudeCliCredentialsMock,
   };
 });
@@ -74,6 +81,7 @@ describe("resolveApiKeyForProfile anthropic proactive refresh", () => {
     vi.stubGlobal("fetch", fetchMock);
     fetchMock.mockReset();
     getOAuthApiKeyMock.mockReset();
+    readClaudeCliCredentialsMock.mockReset().mockReturnValue(null);
     writeClaudeCliCredentialsMock.mockClear();
     clearRuntimeAuthProfileStoreSnapshots();
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-anthropic-refresh-"));
@@ -215,6 +223,59 @@ describe("resolveApiKeyForProfile anthropic proactive refresh", () => {
     ).rejects.toThrow(/OAuth token refresh failed for anthropic/);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(getOAuthApiKeyMock).not.toHaveBeenCalled();
+    expect(writeClaudeCliCredentialsMock).not.toHaveBeenCalled();
+  });
+
+  it("recovers from anthropic invalid_grant by reloading fresh Claude CLI credentials", async () => {
+    const profileId = "anthropic:default";
+    const recoveredExpires = Date.now() + 90 * 60_000;
+    saveAuthProfileStore(
+      createOauthStore({
+        profileId,
+        access: "expired-access",
+        refresh: "expired-refresh",
+        expires: Date.now() - 60_000,
+      }),
+      agentDir,
+    );
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: "invalid_grant",
+          error_description: "Refresh token not found or invalid",
+        }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    readClaudeCliCredentialsMock.mockReturnValue({
+      type: "oauth",
+      provider: "anthropic",
+      access: "fresh-cli-access",
+      refresh: "fresh-cli-refresh",
+      expires: recoveredExpires,
+    });
+
+    const result = await resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(agentDir),
+      profileId,
+      agentDir,
+    });
+
+    expect(result).toEqual({
+      apiKey: "fresh-cli-access", // pragma: allowlist secret
+      provider: "anthropic",
+      email: undefined,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(readClaudeCliCredentialsMock).toHaveBeenCalledTimes(1);
+    const updated = ensureAuthProfileStore(agentDir).profiles[profileId];
+    expect(updated).toMatchObject({
+      type: "oauth",
+      provider: "anthropic",
+      access: "fresh-cli-access",
+      refresh: "fresh-cli-refresh",
+      expires: recoveredExpires,
+    });
     expect(writeClaudeCliCredentialsMock).not.toHaveBeenCalled();
   });
 

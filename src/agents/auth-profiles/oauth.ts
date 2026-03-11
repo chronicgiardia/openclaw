@@ -10,9 +10,14 @@ import { withFileLock } from "../../infra/file-lock.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
-import { writeClaudeCliCredentials } from "../cli-credentials.js";
+import { readClaudeCliCredentials, writeClaudeCliCredentials } from "../cli-credentials.js";
 import { normalizeProviderId } from "../model-selection.js";
-import { ANTHROPIC_OAUTH_PROACTIVE_REFRESH_MS, AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
+import {
+  ANTHROPIC_OAUTH_PROACTIVE_REFRESH_MS,
+  AUTH_STORE_LOCK_OPTIONS,
+  CLAUDE_CLI_PROFILE_ID,
+  log,
+} from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
@@ -32,6 +37,7 @@ const resolveOAuthProvider = (provider: string): OAuthProvider | null =>
 
 /** Bearer-token auth modes that are interchangeable (oauth tokens and raw tokens). */
 const BEARER_AUTH_MODES = new Set(["oauth", "token"]);
+const ANTHROPIC_DEFAULT_PROFILE_ID = "anthropic:default";
 
 const isCompatibleModeType = (mode: string | undefined, type: string | undefined): boolean => {
   if (!mode || !type) {
@@ -138,6 +144,63 @@ function mirrorAnthropicOAuthToClaudeCli(provider: string, credentials: OAuthCre
     return;
   }
   writeClaudeCliCredentials(credentials);
+}
+
+function isAnthropicInvalidGrantError(provider: string, error: unknown): boolean {
+  if (normalizeProviderId(provider) !== "anthropic") {
+    return false;
+  }
+  return /invalid_grant|refresh token not found or invalid/i.test(extractErrorMessage(error));
+}
+
+function recoverAnthropicProfileFromClaudeCli(params: {
+  store: AuthProfileStore;
+  profileId: string;
+  agentDir?: string;
+  email?: string;
+}): { apiKey: string; provider: string; email?: string } | null {
+  const freshCliCred = readClaudeCliCredentials({ allowKeychainPrompt: false });
+  if (!freshCliCred || freshCliCred.provider !== "anthropic") {
+    return null;
+  }
+
+  const recoveredCred = params.email ? { ...freshCliCred, email: params.email } : freshCliCred;
+  const recoveredEmail = "email" in recoveredCred ? recoveredCred.email : params.email;
+  params.store.profiles[CLAUDE_CLI_PROFILE_ID] = { ...recoveredCred };
+  params.store.profiles[ANTHROPIC_DEFAULT_PROFILE_ID] = { ...recoveredCred };
+  params.store.profiles[params.profileId] = { ...recoveredCred };
+  saveAuthProfileStore(params.store, params.agentDir);
+
+  log.info("recovered anthropic credentials from fresh claude cli login", {
+    profileId: params.profileId,
+    agentDir: params.agentDir,
+    expires:
+      typeof recoveredCred.expires === "number" && Number.isFinite(recoveredCred.expires)
+        ? new Date(recoveredCred.expires).toISOString()
+        : undefined,
+    type: recoveredCred.type,
+  });
+
+  if (recoveredCred.type === "oauth") {
+    if (!isOAuthStillValid(recoveredCred)) {
+      return null;
+    }
+    return buildOAuthProfileResult({
+      provider: recoveredCred.provider,
+      credentials: recoveredCred,
+      email: recoveredEmail,
+    });
+  }
+
+  const expiryState = resolveTokenExpiryState(recoveredCred.expires);
+  if (expiryState === "expired" || expiryState === "invalid_expires") {
+    return null;
+  }
+  return buildApiKeyProfileResult({
+    apiKey: recoveredCred.token,
+    provider: recoveredCred.provider,
+    email: recoveredEmail,
+  });
 }
 
 async function refreshAnthropicClaudeToken(refreshToken: string): Promise<OAuthCredentials> {
@@ -349,6 +412,17 @@ export async function forceRefreshOAuthProfile(params: {
         credentials: refreshed,
         email: refreshed.email ?? cred.email,
       });
+    }
+    if (isAnthropicInvalidGrantError(cred.provider, error)) {
+      const recovered = recoverAnthropicProfileFromClaudeCli({
+        store: refreshedStore,
+        profileId: params.profileId,
+        agentDir: params.agentDir,
+        email: cred.email,
+      });
+      if (recovered) {
+        return recovered;
+      }
     }
     throw error;
   }
@@ -583,6 +657,17 @@ export async function resolveApiKeyForProfile(
         credentials: refreshed,
         email: refreshed.email ?? cred.email,
       });
+    }
+    if (isAnthropicInvalidGrantError(cred.provider, error)) {
+      const recovered = recoverAnthropicProfileFromClaudeCli({
+        store: refreshedStore,
+        profileId,
+        agentDir: params.agentDir,
+        email: cred.email,
+      });
+      if (recovered) {
+        return recovered;
+      }
     }
     if (isOAuthStillValid(oauthCred)) {
       log.warn("oauth proactive refresh failed; using still-valid cached token", {

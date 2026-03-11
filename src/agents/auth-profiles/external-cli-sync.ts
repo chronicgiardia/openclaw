@@ -77,6 +77,16 @@ function shouldReplaceExternalCredential(params: {
   provider: string;
   now: number;
 }): boolean {
+  const existingExpiry = resolveExternalCredentialExpiry(params.existing);
+  const incomingExpiry = resolveExternalCredentialExpiry(params.incoming);
+  if (
+    params.existing &&
+    isExternalProfileFresh(params.existing, params.now) &&
+    typeof existingExpiry === "number" &&
+    (typeof incomingExpiry !== "number" || incomingExpiry < existingExpiry)
+  ) {
+    return false;
+  }
   return (
     !params.existing ||
     params.existing.type !== params.incoming.type ||
@@ -84,8 +94,7 @@ function shouldReplaceExternalCredential(params: {
     !isExternalProfileFresh(params.existing, params.now) ||
     !shallowEqualCliCredential(params.existing, params.incoming) ||
     (typeof params.incoming.expires === "number" &&
-      (typeof resolveExternalCredentialExpiry(params.existing) !== "number" ||
-        params.incoming.expires > (resolveExternalCredentialExpiry(params.existing) ?? 0)))
+      (typeof existingExpiry !== "number" || params.incoming.expires > existingExpiry))
   );
 }
 

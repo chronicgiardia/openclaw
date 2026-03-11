@@ -98,4 +98,49 @@ describe("syncExternalCliCredentials", () => {
       expires: freshExpiry,
     });
   });
+
+  it("does not downgrade fresher anthropic credentials with an older cached Claude CLI value", () => {
+    const freshExpiry = Date.now() + 2 * 60 * 60_000;
+    const staleExpiry = Date.now() + 30 * 60_000;
+    readClaudeCliCredentialsCachedMock.mockReturnValue({
+      type: "oauth",
+      provider: "anthropic",
+      access: "stale-cached-access",
+      refresh: "stale-cached-refresh",
+      expires: staleExpiry,
+    });
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [CLAUDE_CLI_PROFILE_ID]: {
+          type: "oauth",
+          provider: "anthropic",
+          access: "fresh-store-access",
+          refresh: "fresh-store-refresh",
+          expires: freshExpiry,
+        },
+        "anthropic:default": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "fresh-store-access",
+          refresh: "fresh-store-refresh",
+          expires: freshExpiry,
+        },
+      },
+    };
+
+    const mutated = syncExternalCliCredentials(store);
+
+    expect(mutated).toBe(false);
+    expect(store.profiles[CLAUDE_CLI_PROFILE_ID]).toMatchObject({
+      access: "fresh-store-access",
+      refresh: "fresh-store-refresh",
+      expires: freshExpiry,
+    });
+    expect(store.profiles["anthropic:default"]).toMatchObject({
+      access: "fresh-store-access",
+      refresh: "fresh-store-refresh",
+      expires: freshExpiry,
+    });
+  });
 });
