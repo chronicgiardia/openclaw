@@ -109,6 +109,8 @@ Flow shape (PKCE):
 
 Wizard path is `openclaw onboard` → auth choice `openai-codex`.
 
+If you are debugging Claude Code login internals, local token files, Anthropic refresh behavior, or headless PKCE repair, read [Claude Code OAuth Login](/concepts/claude-code-oauth).
+
 ## Refresh + expiry
 
 Profiles store an `expires` timestamp.
