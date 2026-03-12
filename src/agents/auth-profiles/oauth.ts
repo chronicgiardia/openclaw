@@ -10,7 +10,11 @@ import { withFileLock } from "../../infra/file-lock.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
-import { readClaudeCliCredentials, writeClaudeCliCredentials } from "../cli-credentials.js";
+import {
+  clearClaudeCliCredentialsCache,
+  readClaudeCliCredentials,
+  writeClaudeCliCredentials,
+} from "../cli-credentials.js";
 import { normalizeProviderId } from "../model-selection.js";
 import {
   ANTHROPIC_OAUTH_PROACTIVE_REFRESH_MS,
@@ -170,6 +174,9 @@ function recoverAnthropicProfileFromClaudeCli(params: {
   params.store.profiles[ANTHROPIC_DEFAULT_PROFILE_ID] = { ...recoveredCred };
   params.store.profiles[params.profileId] = { ...recoveredCred };
   saveAuthProfileStore(params.store, params.agentDir);
+  // The gateway can keep a long-lived cached Claude CLI snapshot in memory.
+  // Clear it so the retry path re-reads the fresh credential we just adopted.
+  clearClaudeCliCredentialsCache();
 
   log.info("recovered anthropic credentials from fresh claude cli login", {
     profileId: params.profileId,

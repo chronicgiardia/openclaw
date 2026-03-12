@@ -28,8 +28,12 @@ let codexCliCache: CachedValue<CodexCliCredential> | null = null;
 let qwenCliCache: CachedValue<QwenCliCredential> | null = null;
 let minimaxCliCache: CachedValue<MiniMaxCliCredential> | null = null;
 
-export function resetCliCredentialCachesForTest(): void {
+export function clearClaudeCliCredentialsCache(): void {
   claudeCliCache = null;
+}
+
+export function resetCliCredentialCachesForTest(): void {
+  clearClaudeCliCredentialsCache();
   codexCliCache = null;
   qwenCliCache = null;
   minimaxCliCache = null;
@@ -442,11 +446,16 @@ export function writeClaudeCliCredentials(
   if (platform === "darwin") {
     const didWriteKeychain = writeKeychain(newCredentials);
     if (didWriteKeychain) {
+      clearClaudeCliCredentialsCache();
       return true;
     }
   }
 
-  return writeFile(newCredentials, { homeDir: options?.homeDir });
+  const didWriteFile = writeFile(newCredentials, { homeDir: options?.homeDir });
+  if (didWriteFile) {
+    clearClaudeCliCredentialsCache();
+  }
+  return didWriteFile;
 }
 
 export function readCodexCliCredentials(options?: {

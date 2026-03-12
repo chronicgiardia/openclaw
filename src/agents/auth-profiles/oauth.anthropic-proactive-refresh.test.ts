@@ -5,11 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
 
 const {
+  clearClaudeCliCredentialsCacheMock,
   fetchMock,
   getOAuthApiKeyMock,
   readClaudeCliCredentialsMock,
   writeClaudeCliCredentialsMock,
 } = vi.hoisted(() => ({
+  clearClaudeCliCredentialsCacheMock: vi.fn(),
   fetchMock: vi.fn(),
   getOAuthApiKeyMock: vi.fn(),
   readClaudeCliCredentialsMock: vi.fn(),
@@ -33,6 +35,7 @@ vi.mock("../cli-credentials.js", async () => {
     await vi.importActual<typeof import("../cli-credentials.js")>("../cli-credentials.js");
   return {
     ...actual,
+    clearClaudeCliCredentialsCache: clearClaudeCliCredentialsCacheMock,
     readClaudeCliCredentials: readClaudeCliCredentialsMock,
     writeClaudeCliCredentials: writeClaudeCliCredentialsMock,
   };
@@ -82,6 +85,7 @@ describe("resolveApiKeyForProfile anthropic proactive refresh", () => {
     fetchMock.mockReset();
     getOAuthApiKeyMock.mockReset();
     readClaudeCliCredentialsMock.mockReset().mockReturnValue(null);
+    clearClaudeCliCredentialsCacheMock.mockReset();
     writeClaudeCliCredentialsMock.mockClear();
     clearRuntimeAuthProfileStoreSnapshots();
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-anthropic-refresh-"));
@@ -268,6 +272,7 @@ describe("resolveApiKeyForProfile anthropic proactive refresh", () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(readClaudeCliCredentialsMock).toHaveBeenCalledTimes(1);
+    expect(clearClaudeCliCredentialsCacheMock).toHaveBeenCalledTimes(1);
     const updated = ensureAuthProfileStore(agentDir).profiles[profileId];
     expect(updated).toMatchObject({
       type: "oauth",

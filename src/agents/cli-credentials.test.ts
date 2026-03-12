@@ -7,6 +7,7 @@ const execSyncMock = vi.fn();
 const execFileSyncMock = vi.fn();
 const CLI_CREDENTIALS_CACHE_TTL_MS = 15 * 60 * 1000;
 let readClaudeCliCredentialsCached: typeof import("./cli-credentials.js").readClaudeCliCredentialsCached;
+let clearClaudeCliCredentialsCache: typeof import("./cli-credentials.js").clearClaudeCliCredentialsCache;
 let resetCliCredentialCachesForTest: typeof import("./cli-credentials.js").resetCliCredentialCachesForTest;
 let writeClaudeCliKeychainCredentials: typeof import("./cli-credentials.js").writeClaudeCliKeychainCredentials;
 let writeClaudeCliCredentials: typeof import("./cli-credentials.js").writeClaudeCliCredentials;
@@ -50,6 +51,7 @@ describe("cli credentials", () => {
   beforeAll(async () => {
     ({
       readClaudeCliCredentialsCached,
+      clearClaudeCliCredentialsCache,
       resetCliCredentialCachesForTest,
       writeClaudeCliKeychainCredentials,
       writeClaudeCliCredentials,
@@ -224,6 +226,57 @@ describe("cli credentials", () => {
     expect(first).toBeTruthy();
     expect(second).toBeTruthy();
     expect(execSyncMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates the cached Claude Code credential after a successful write", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-cache-"));
+    const credPath = path.join(tempDir, ".claude", ".credentials.json");
+    fs.mkdirSync(path.dirname(credPath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      credPath,
+      `${JSON.stringify(
+        {
+          claudeAiOauth: {
+            accessToken: "stale-access",
+            refreshToken: "stale-refresh",
+            expiresAt: Date.now() + 60_000,
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const first = readClaudeCliCredentialsCached({
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "linux",
+      homeDir: tempDir,
+    });
+    expect(first).toMatchObject({ type: "oauth", access: "stale-access" });
+
+    const ok = writeClaudeCliCredentials(
+      {
+        access: "fresh-access",
+        refresh: "fresh-refresh",
+        expires: Date.now() + 120_000,
+      },
+      {
+        platform: "linux",
+        homeDir: tempDir,
+      },
+    );
+
+    expect(ok).toBe(true);
+
+    const second = readClaudeCliCredentialsCached({
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "linux",
+      homeDir: tempDir,
+    });
+    expect(second).toMatchObject({ type: "oauth", access: "fresh-access" });
+
+    clearClaudeCliCredentialsCache();
   });
 
   it("reads Codex credentials from keychain when available", async () => {
