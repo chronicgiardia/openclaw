@@ -70,6 +70,70 @@ describe("before_tool_call hook integration", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it("blocks gateway lifecycle exec commands from live chat sessions", async () => {
+    hookRunner.hasHooks.mockReturnValue(false);
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any, {
+      agentId: "dgxspark",
+      sessionKey: "agent:dgxspark:discord:channel:1468143510984196127",
+    });
+
+    await expect(
+      tool.execute(
+        "call-chat-restart",
+        { command: "cd /repo && openclaw gateway restart 2>&1" },
+        undefined,
+        undefined,
+      ),
+    ).rejects.toThrow("Do not manage the OpenClaw gateway from a live chat session");
+    expect(execute).not.toHaveBeenCalled();
+    expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
+  });
+
+  it("allows non-lifecycle exec commands from live chat sessions", async () => {
+    hookRunner.hasHooks.mockReturnValue(false);
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any, {
+      agentId: "dgxspark",
+      sessionKey: "agent:dgxspark:discord:channel:1468143510984196127",
+    });
+
+    await tool.execute("call-chat-safe", { command: "ls -la" }, undefined, undefined);
+
+    expect(execute).toHaveBeenCalledWith(
+      "call-chat-safe",
+      { command: "ls -la" },
+      undefined,
+      undefined,
+    );
+  });
+
+  it("allows gateway lifecycle exec commands from non-chat sessions", async () => {
+    hookRunner.hasHooks.mockReturnValue(false);
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any, {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    });
+
+    await tool.execute(
+      "call-main-restart",
+      { command: "openclaw gateway restart" },
+      undefined,
+      undefined,
+    );
+
+    expect(execute).toHaveBeenCalledWith(
+      "call-main-restart",
+      { command: "openclaw gateway restart" },
+      undefined,
+      undefined,
+    );
+  });
+
   it("continues execution when hook throws", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     hookRunner.runBeforeToolCall.mockRejectedValue(new Error("boom"));
