@@ -32,6 +32,7 @@ import type { AuthProfileStore } from "./types.js";
 const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
 const CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CLAUDE_OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
+const ANTHROPIC_OAUTH_EARLY_EXPIRY_GRACE_MS = 5 * 60 * 1000;
 
 const isOAuthProvider = (provider: string): provider is OAuthProvider =>
   OAUTH_PROVIDER_IDS.has(provider);
@@ -120,6 +121,29 @@ function shouldUseOpenaiCodexRefreshFallback(params: {
   return (
     typeof params.credentials.access === "string" && params.credentials.access.trim().length > 0
   );
+}
+
+function shouldUseAnthropicCachedAccessFallback(params: {
+  provider: string;
+  credentials: OAuthCredentials;
+  now?: number;
+}): boolean {
+  if (normalizeProviderId(params.provider) !== "anthropic") {
+    return false;
+  }
+  if (
+    typeof params.credentials.access !== "string" ||
+    params.credentials.access.trim().length === 0 ||
+    !Number.isFinite(params.credentials.expires)
+  ) {
+    return false;
+  }
+
+  // Anthropic refreshes are stored 5 minutes early in this branch. If refresh fails inside that
+  // window, the cached access token may still be valid and matches CLIProxyAPI's exact-expiry
+  // behavior more closely.
+  const now = params.now ?? Date.now();
+  return now < params.credentials.expires + ANTHROPIC_OAUTH_EARLY_EXPIRY_GRACE_MS;
 }
 
 function isValidOAuthExpiry(expires: number): boolean {
@@ -485,6 +509,26 @@ async function tryResolveOAuthProfile(
       email: cred.email,
     });
   } catch (error) {
+    if (
+      shouldUseAnthropicCachedAccessFallback({
+        provider: cred.provider,
+        credentials: cred,
+      })
+    ) {
+      log.warn(
+        "anthropic oauth refresh failed inside early-expiry window; using cached access token fallback",
+        {
+          profileId,
+          provider: cred.provider,
+          error: extractErrorMessage(error),
+        },
+      );
+      return buildApiKeyProfileResult({
+        apiKey: cred.access,
+        provider: cred.provider,
+        email: cred.email,
+      });
+    }
     if (isOAuthStillValid(cred)) {
       log.warn("oauth proactive refresh failed; using still-valid cached token", {
         profileId,
@@ -747,6 +791,27 @@ export async function resolveApiKeyForProfile(
         profileId,
         provider: cred.provider,
       });
+      return buildApiKeyProfileResult({
+        apiKey: cred.access,
+        provider: cred.provider,
+        email: cred.email,
+      });
+    }
+
+    if (
+      shouldUseAnthropicCachedAccessFallback({
+        provider: cred.provider,
+        credentials: cred,
+      })
+    ) {
+      log.warn(
+        "anthropic oauth refresh failed inside early-expiry window; using cached access token fallback",
+        {
+          profileId,
+          provider: cred.provider,
+          error: extractErrorMessage(error),
+        },
+      );
       return buildApiKeyProfileResult({
         apiKey: cred.access,
         provider: cred.provider,

@@ -33,6 +33,7 @@ function createExpiredOauthStore(params: {
   profileId: string;
   provider: string;
   access?: string;
+  expiresOffsetMs?: number;
 }): AuthProfileStore {
   return {
     version: 1,
@@ -42,7 +43,7 @@ function createExpiredOauthStore(params: {
         provider: params.provider,
         access: params.access ?? "cached-access-token",
         refresh: "refresh-token",
-        expires: Date.now() - 60_000,
+        expires: Date.now() + (params.expiresOffsetMs ?? -60_000),
       },
     },
   };
@@ -98,12 +99,36 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps throwing for non-codex providers on the same refresh error", async () => {
+  it("falls back to cached access token for anthropic inside the early-expiry grace window", async () => {
     const profileId = "anthropic:default";
     saveAuthProfileStore(
       createExpiredOauthStore({
         profileId,
         provider: "anthropic",
+      }),
+      agentDir,
+    );
+
+    await expect(
+      resolveApiKeyForProfile({
+        store: ensureAuthProfileStore(agentDir),
+        profileId,
+        agentDir,
+      }),
+    ).resolves.toEqual({
+      apiKey: "cached-access-token", // pragma: allowlist secret
+      provider: "anthropic",
+      email: undefined,
+    });
+  });
+
+  it("keeps throwing for anthropic outside the early-expiry grace window", async () => {
+    const profileId = "anthropic:default";
+    saveAuthProfileStore(
+      createExpiredOauthStore({
+        profileId,
+        provider: "anthropic",
+        expiresOffsetMs: -(6 * 60_000),
       }),
       agentDir,
     );
