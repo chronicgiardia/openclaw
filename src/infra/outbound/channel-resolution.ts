@@ -32,11 +32,10 @@ function maybeBootstrapChannelPlugin(params: {
     return;
   }
 
-  const activeRegistry = getActivePluginRegistry();
-  if ((activeRegistry?.channels?.length ?? 0) > 0) {
-    return;
-  }
-
+  // Some runtimes keep a partially populated active registry (for example after
+  // loading only workspace-local plugins). If the requested channel is missing,
+  // try one full bootstrap instead of assuming "non-empty registry" means the
+  // channel is available.
   const registryKey = getActivePluginRegistryKey() ?? "<none>";
   const attemptKey = `${registryKey}:${params.channel}`;
   if (bootstrapAttempts.has(attemptKey)) {
@@ -58,6 +57,22 @@ function maybeBootstrapChannelPlugin(params: {
   }
 }
 
+function resolveDirectFromActiveRegistry(
+  channel: DeliverableMessageChannel,
+): ChannelPlugin | undefined {
+  const activeRegistry = getActivePluginRegistry();
+  if (!activeRegistry) {
+    return undefined;
+  }
+  for (const entry of activeRegistry.channels) {
+    const plugin = entry?.plugin;
+    if (plugin?.id === channel) {
+      return plugin;
+    }
+  }
+  return undefined;
+}
+
 export function resolveOutboundChannelPlugin(params: {
   channel: string;
   cfg?: OpenClawConfig;
@@ -72,7 +87,20 @@ export function resolveOutboundChannelPlugin(params: {
   if (current) {
     return current;
   }
+  const directCurrent = resolveDirectFromActiveRegistry(normalized);
+  if (directCurrent) {
+    return directCurrent;
+  }
 
   maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
-  return resolve();
+  const result = resolve() ?? resolveDirectFromActiveRegistry(normalized);
+  if (!result) {
+    // Clear bootstrap attempt cache so next call will retry plugin loading.
+    // This handles cases where Discord WS reconnects but the plugin wasn't
+    // properly registered during the first bootstrap attempt.
+    const registryKey = getActivePluginRegistryKey() ?? "<none>";
+    const attemptKey = `${registryKey}:${normalized}`;
+    bootstrapAttempts.delete(attemptKey);
+  }
+  return result;
 }
